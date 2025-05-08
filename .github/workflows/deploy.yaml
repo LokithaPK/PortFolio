@@ -1,0 +1,25 @@
+name: Deploy to Kubernetes
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    # Install kubectl
+    - name: Install kubectl
+      uses: azure/setup-kubectl@v3
+      
+    # Configure kubectl (using secrets you've set up)
+    - name: Configure Kubernetes
+      run: |
+        mkdir -p ~/.kube
+        echo "${{ secrets.KUBE_CONFIG }}" > ~/.kube/config
+        
+    # Deploy to Kubernetes
+    - name: Deploy
+      run: kubectl apply -f k8s/
