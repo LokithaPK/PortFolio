@@ -2,24 +2,74 @@ name: Deploy to Kubernetes
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
+
+env:
+  APP_NAME: "portfolio"
+  K8S_NAMESPACE: "default"  # Change if using custom namespace
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    
-    # Install kubectl
-    - name: Install kubectl
-      uses: azure/setup-kubectl@v3
-      
-    # Configure kubectl (using secrets you've set up)
-    - name: Configure Kubernetes
-      run: |
-        mkdir -p ~/.kube
-        echo "${{ secrets.KUBE_CONFIG }}" > ~/.kube/config
-        
-    # Deploy to Kubernetes
-    - name: Deploy
-      run: kubectl apply -f k8s/
+      # ========== SETUP ==========
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # ========== KUBECTL SETUP ==========
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'  # or specify a version like 'v1.25.0'
+
+      - name: Configure Kubernetes
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" > ~/.kube/config
+          chmod 600 ~/.kube/config
+          
+      # ========== VERIFICATION ==========
+      - name: Verify Cluster Access
+        run: |
+          kubectl cluster-info
+          kubectl get nodes
+          
+      - name: Validate Kubernetes Files
+        run: |
+          ls -la k8s/
+          [ -f k8s/deployment.yaml ] || { echo "❌ deployment.yaml missing"; exit 1; }
+          [ -f k8s/service.yaml ] || { echo "❌ service.yaml missing"; exit 1; }
+          kubectl apply -f k8s/ --dry-run=server
+
+      # ========== DEPLOYMENT ==========
+      - name: Deploy Application
+        run: |
+          echo "🚀 Applying Kubernetes manifests..."
+          kubectl apply -f k8s/ -n ${{ env.K8S_NAMESPACE }}
+          
+          echo "🔄 Checking rollout status..."
+          kubectl rollout status deployment/${{ env.APP_NAME }}-deployment -n ${{ env.K8S_NAMESPACE }} --timeout=90s
+          
+          echo "✅ Deployment successful!"
+          kubectl get all -n ${{ env.K8S_NAMESPACE }}
+
+      # ========== POST-DEPLOYMENT CHECKS ==========
+      - name: Verify Deployment
+        run: |
+          echo "📦 Pod status:"
+          kubectl get pods -n ${{ env.K8S_NAMESPACE }} -l app=${{ env.APP_NAME }}
+          
+          echo "📜 Pod details:"
+          kubectl describe pods -n ${{ env.K8S_NAMESPACE }} -l app=${{ env.APP_NAME }}
+          
+          echo "📝 Application logs:"
+          kubectl logs -n ${{ env.K8S_NAMESPACE }} -l app=${{ env.APP_NAME }} --tail=50
+
+      # ========== ROLLBACK ON FAILURE ==========
+      - name: Rollback on Failure
+        if: failure()
+        run: |
+          echo "⚠️ Deployment failed! Attempting rollback..."
+          kubectl rollout undo deployment/${{ env.APP_NAME }}-deployment -n ${{ env.K8S_NAMESPACE }}
+          echo "🔄 Rollback complete"
+          exit 1  # Ensure job fails even after rollback
